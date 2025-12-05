@@ -1,4 +1,4 @@
-name: Port to Android 14 (Manual NDK) & Build
+name: Port to Android 14 & Build
 
 on:
   workflow_dispatch:
@@ -14,6 +14,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
+        clean: true # Garante que começamos do zero sem lixo de builds anteriores
 
     # =================================================================
     # 1. PREPARAÇÃO DO AMBIENTE
@@ -38,17 +39,22 @@ jobs:
     # =================================================================
     # 2. MODIFICAÇÃO DO CÓDIGO RUST (Visibilidade & JNI)
     # =================================================================
-    - name: Patch Rust Code
+    - name: Patch Rust Code and Create Files
       run: |
-        echo "🔧 Tornando campos Rust públicos..."
-        # O "|| true" evita falha se já tiver sido modificado
-        sed -i 's/cpu: Cpu65816/pub cpu: Cpu65816/' src/snes/emulator.rs || true
-        sed -i 's/joypad_senders: Option/pub joypad_senders: Option/' src/snes/emulator.rs || true
-        sed -i 's/ppu: PPU/pub ppu: PPU/' src/snes/bus/mainbus.rs || true
-        sed -i 's/renderer: Option/pub renderer: Option/' src/snes/ppu/ppu.rs || true
+        echo "🔧 Ajustando visibilidade das Structs (apenas se necessário)..."
+        
+        # O regex '^\s*' garante que só substituímos se começar com espaços, evitando 'pub pub'
+        # src/snes/emulator.rs
+        sed -i 's/^\s*cpu: Cpu65816/    pub cpu: Cpu65816/' src/snes/emulator.rs
+        sed -i 's/^\s*joypad_senders: Option/    pub joypad_senders: Option/' src/snes/emulator.rs
+        
+        # src/snes/bus/mainbus.rs
+        sed -i 's/^\s*ppu: PPU/    pub ppu: PPU/' src/snes/bus/mainbus.rs
+        
+        # src/snes/ppu/ppu.rs
+        sed -i 's/^\s*renderer: Option/    pub renderer: Option/' src/snes/ppu/ppu.rs
 
         echo "📦 Atualizando Cargo.toml..."
-        if ! grep -q "crate-type" Cargo.toml; then
         cat <<EOF >> Cargo.toml
 
         [lib]
@@ -63,12 +69,13 @@ jobs:
         [dependencies.log]
         version = "0.4"
         EOF
-        fi
 
-        echo "📚 Atualizando lib.rs..."
-        if ! grep -q "lib_jni" src/lib.rs; then
-           echo '#[cfg(target_os = "android")] pub mod lib_jni;' >> src/lib.rs
-        fi
+        echo "📚 Registrando módulos..."
+        # Adiciona lib_jni ao root
+        echo '#[cfg(target_os = "android")] pub mod lib_jni;' >> src/lib.rs
+        
+        # FIX CRÍTICO: Registra o módulo android dentro de frontend
+        echo 'pub mod android;' >> src/frontend/mod.rs
 
         echo "🦀 Criando src/frontend/android.rs..."
         mkdir -p src/frontend
@@ -120,10 +127,11 @@ jobs:
         EOF
 
         echo "🔗 Criando bridge JNI (src/lib_jni.rs)..."
+        # FIX: Tipos JByteArray e with_max_level
         cat <<EOF > src/lib_jni.rs
         use jni::JNIEnv;
-        use jni::objects::{JClass, JIntArray};
-        use jni::sys::{jboolean, jint, jbyteArray};
+        use jni::objects::{JClass, JIntArray, JByteArray};
+        use jni::sys::{jboolean, jint};
         use crate::snes::emulator::Emulator;
         use crate::snes::cartridge::{Cartridge, VideoFormat};
         use crate::snes::joypad::{Joypad, JoypadEvent, Button, JOYPAD_COUNT};
@@ -135,11 +143,13 @@ jobs:
         static mut JOYPAD_SENDERS: Option<[crossbeam_channel::Sender<JoypadEvent>; JOYPAD_COUNT]> = None;
 
         #[no_mangle]
-        pub extern "system" fn Java_com_example_siena_SienaNative_init(env: JNIEnv, _c: JClass, rom: jbyteArray, ipl: jbyteArray) -> jboolean {
-            android_logger::init_once(android_logger::Config::default().with_min_level(log::Level::Info));
+        pub extern "system" fn Java_com_example_siena_SienaNative_init(env: JNIEnv, _c: JClass, rom: JByteArray, ipl: JByteArray) -> jboolean {
+            // FIX: with_max_level em vez de min_level
+            android_logger::init_once(android_logger::Config::default().with_max_level(log::Level::Info));
             
-            let r_vec = match env.convert_byte_array(rom) { Ok(v) => v, Err(_) => return 0 };
-            let i_vec = match env.convert_byte_array(ipl) { Ok(v) => v, Err(_) => return 0 };
+            // FIX: &rom (referência para o objeto JNI wrapper)
+            let r_vec = match env.convert_byte_array(&rom) { Ok(v) => v, Err(_) => return 0 };
+            let i_vec = match env.convert_byte_array(&ipl) { Ok(v) => v, Err(_) => return 0 };
             
             if r_vec.is_empty() || i_vec.len() != 64 { return 0; }
 
@@ -166,7 +176,6 @@ jobs:
         pub extern "system" fn Java_com_example_siena_SienaNative_tickFrame(_e: JNIEnv, _c: JClass) {
             unsafe { if let Some(emu) = &mut EMULATOR {
                 let mut ticks = 0;
-                // Roda ~1 frame (350k ticks master)
                 while ticks < 350_000 { 
                     match emu.tick() { Ok(_) => ticks += 80, Err(_) => break, } 
                 }
@@ -178,7 +187,7 @@ jobs:
             unsafe { if let Some(emu) = &mut EMULATOR {
                 if let Some(rend) = &emu.cpu.bus.ppu.renderer {
                     let p = rend.get_pixels();
-                    let _ = env.set_int_array_region(buf, 0, p.iter().map(|&x| x as i32).collect::<Vec<i32>>().as_slice());
+                    let _ = env.set_int_array_region(&buf, 0, p.iter().map(|&x| x as i32).collect::<Vec<i32>>().as_slice());
                 }
             }}
         }
@@ -192,21 +201,21 @@ jobs:
         EOF
 
     # =================================================================
-    # 3. GERAÇÃO DOS ARQUIVOS ANDROID (SEM PLUGIN MOZILLA)
+    # 3. GERAÇÃO DOS ARQUIVOS ANDROID
     # =================================================================
     - name: Create Android Project Files
       run: |
-        echo "📱 Gerando estrutura de pastas..."
         mkdir -p android/app/src/main/java/com/example/siena
         mkdir -p android/app/src/main/res/layout
         mkdir -p android/app/src/main/res/values
 
-        # --- Gradle Root ---
+        # Gradle Root
         cat <<EOF > android/build.gradle
         buildscript {
             repositories {
                 google()
                 mavenCentral()
+                gradlePluginPortal()
             }
             dependencies {
                 classpath 'com.android.tools.build:gradle:8.2.0'
@@ -224,14 +233,13 @@ jobs:
         }
         EOF
 
-        # --- Settings Gradle ---
+        # Settings
         cat <<EOF > android/settings.gradle
         rootProject.name = "Siena"
         include ':app'
         EOF
 
-        # --- App Gradle ---
-        # Removido o plugin rust-android-gradle. Compilação manual via cargo-ndk abaixo.
+        # App Gradle
         cat <<EOF > android/app/build.gradle
         plugins {
             id 'com.android.application'
@@ -248,8 +256,6 @@ jobs:
                 targetSdk 34
                 versionCode 1
                 versionName "1.0"
-                
-                // Indica ao Gradle que usaremos bibliotecas nativas pré-compiladas
                 ndk {
                     abiFilters "arm64-v8a", "x86_64"
                 }
@@ -271,8 +277,6 @@ jobs:
             buildFeatures {
                 viewBinding true
             }
-            
-            // Define onde o Gradle vai encontrar as .so compiladas pelo cargo-ndk
             sourceSets {
                 main {
                     jniLibs.srcDirs = ['src/main/jniLibs']
@@ -289,14 +293,11 @@ jobs:
         }
         EOF
 
-        # --- Manifest ---
+        # Manifest
         cat <<EOF > android/app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android"
             xmlns:tools="http://schemas.android.com/tools">
-            
-            <!-- Permissões básicas. O SAF (Storage Access Framework) dispensa permissoes de arquivo. -->
-            
             <application
                 android:allowBackup="true"
                 android:label="Siena SNES"
@@ -316,7 +317,7 @@ jobs:
         </manifest>
         EOF
 
-        # --- Themes ---
+        # Theme
         cat <<EOF > android/app/src/main/res/values/themes.xml
         <resources>
             <style name="Theme.Siena" parent="Theme.AppCompat.NoActionBar">
@@ -327,8 +328,7 @@ jobs:
         </resources>
         EOF
 
-        # --- Layout: activity_main.xml ---
-        # AQUI ESTÁ O ARQUIVO QUE VOCÊ PEDIU
+        # Layout
         cat <<EOF > android/app/src/main/res/layout/activity_main.xml
         <?xml version="1.0" encoding="utf-8"?>
         <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -337,7 +337,6 @@ jobs:
             android:layout_height="match_parent"
             android:background="#222222">
 
-            <!-- Tela do Emulador -->
             <com.example.siena.EmulatorView
                 android:id="@+id/emulatorView"
                 android:layout_width="0dp"
@@ -348,7 +347,6 @@ jobs:
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintEnd_toEndOf="parent" />
 
-            <!-- Área de Loaders -->
             <LinearLayout
                 android:id="@+id/layoutLoaders"
                 android:layout_width="wrap_content"
@@ -362,7 +360,7 @@ jobs:
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="SIENA SNES - Android 14"
+                    android:text="SIENA SNES"
                     android:textColor="#FFFFFF"
                     android:textSize="24sp"
                     android:layout_marginBottom="20dp"
@@ -381,7 +379,6 @@ jobs:
                     android:text="2. Load Game (.sfc)" />
             </LinearLayout>
 
-            <!-- Controles -->
             <RelativeLayout
                 android:id="@+id/layoutControls"
                 android:layout_width="match_parent"
@@ -416,7 +413,7 @@ jobs:
         </androidx.constraintlayout.widget.ConstraintLayout>
         EOF
 
-        # --- Kotlin: SienaNative.kt ---
+        # Kotlin: SienaNative.kt
         cat <<EOF > android/app/src/main/java/com/example/siena/SienaNative.kt
         package com.example.siena
         object SienaNative {
@@ -432,7 +429,7 @@ jobs:
         }
         EOF
 
-        # --- Kotlin: EmulatorView.kt ---
+        # Kotlin: EmulatorView.kt
         cat <<EOF > android/app/src/main/java/com/example/siena/EmulatorView.kt
         package com.example.siena
         import android.content.Context
@@ -463,7 +460,7 @@ jobs:
         }
         EOF
 
-        # --- Kotlin: MainActivity.kt ---
+        # Kotlin: MainActivity.kt
         cat <<EOF > android/app/src/main/java/com/example/siena/MainActivity.kt
         package com.example.siena
         import android.net.Uri
@@ -576,23 +573,10 @@ jobs:
         EOF
 
     # =================================================================
-    # 4. COMMIT & PUSH
-    # =================================================================
-    - name: Commit Changes
-      run: |
-        git config --global user.name 'github-actions[bot]'
-        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-        git add .
-        git commit -m "Complete Android Port (Groovy+Manual NDK)" || echo "No changes"
-        git push
-
-    # =================================================================
-    # 5. COMPILAÇÃO NATIVA E APK
+    # 4. BUILD NATIVE & APK
     # =================================================================
     - name: Build Native Libs (cargo-ndk)
       run: |
-        # Compila Rust para Android e coloca .so direto onde o Gradle espera
-        # Gradle (Groovy) está configurado para ler de 'src/main/jniLibs'
         cargo ndk -t arm64-v8a -t x86_64 -o android/app/src/main/jniLibs build --release
 
     - name: Build APK (Gradle)
