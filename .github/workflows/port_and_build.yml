@@ -1,4 +1,4 @@
-name: Port to Android 14 & Build
+name: Port to Android 14 (Manual NDK) & Build
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  convert-and-build:
+  build-android:
     runs-on: ubuntu-latest
 
     steps:
@@ -15,16 +15,33 @@ jobs:
       with:
         submodules: recursive
 
-    # ---------------------------------------------------------
-    # 1. MODIFICAÇÃO E CRIAÇÃO DOS ARQUIVOS
-    # ---------------------------------------------------------
-    - name: Apply Android Port Modifications
-      run: |
-        echo "🔧 Configurando Git..."
-        git config --global user.name 'github-actions[bot]'
-        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+    # =================================================================
+    # 1. PREPARAÇÃO DO AMBIENTE
+    # =================================================================
+    - name: Setup Java 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
 
-        echo "🔧 Modificando visibilidade das Structs Rust..."
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-linux-android,x86_64-linux-android
+
+    - name: Install Cargo NDK
+      run: cargo install cargo-ndk
+
+    # =================================================================
+    # 2. MODIFICAÇÃO DO CÓDIGO RUST (Visibilidade & JNI)
+    # =================================================================
+    - name: Patch Rust Code
+      run: |
+        echo "🔧 Tornando campos Rust públicos..."
+        # O "|| true" evita falha se já tiver sido modificado
         sed -i 's/cpu: Cpu65816/pub cpu: Cpu65816/' src/snes/emulator.rs || true
         sed -i 's/joypad_senders: Option/pub joypad_senders: Option/' src/snes/emulator.rs || true
         sed -i 's/ppu: PPU/pub ppu: PPU/' src/snes/bus/mainbus.rs || true
@@ -102,7 +119,7 @@ jobs:
         }
         EOF
 
-        echo "bridge JNI: src/lib_jni.rs..."
+        echo "🔗 Criando bridge JNI (src/lib_jni.rs)..."
         cat <<EOF > src/lib_jni.rs
         use jni::JNIEnv;
         use jni::objects::{JClass, JIntArray};
@@ -149,7 +166,8 @@ jobs:
         pub extern "system" fn Java_com_example_siena_SienaNative_tickFrame(_e: JNIEnv, _c: JClass) {
             unsafe { if let Some(emu) = &mut EMULATOR {
                 let mut ticks = 0;
-                while ticks < 300_000 { 
+                // Roda ~1 frame (350k ticks master)
+                while ticks < 350_000 { 
                     match emu.tick() { Ok(_) => ticks += 80, Err(_) => break, } 
                 }
             }}
@@ -173,23 +191,26 @@ jobs:
         }
         EOF
 
-        echo "📱 Gerando Projeto Android (Groovy + Gradle)..."
+    # =================================================================
+    # 3. GERAÇÃO DOS ARQUIVOS ANDROID (SEM PLUGIN MOZILLA)
+    # =================================================================
+    - name: Create Android Project Files
+      run: |
+        echo "📱 Gerando estrutura de pastas..."
         mkdir -p android/app/src/main/java/com/example/siena
         mkdir -p android/app/src/main/res/layout
         mkdir -p android/app/src/main/res/values
 
-        # Gradle Root
+        # --- Gradle Root ---
         cat <<EOF > android/build.gradle
         buildscript {
             repositories {
                 google()
                 mavenCentral()
-                gradlePluginPortal()
             }
             dependencies {
-                classpath 'com.android.tools.build:gradle:8.1.0'
-                classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.0'
-                classpath 'org.mozilla.rust-android-gradle:plugin:0.9.3'
+                classpath 'com.android.tools.build:gradle:8.2.0'
+                classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.0'
             }
         }
         allprojects {
@@ -202,18 +223,19 @@ jobs:
             delete rootProject.buildDir
         }
         EOF
-        
+
+        # --- Settings Gradle ---
         cat <<EOF > android/settings.gradle
         rootProject.name = "Siena"
         include ':app'
         EOF
-        
-        # App Gradle - CORREÇÃO CRÍTICA: 'delegate.module'
+
+        # --- App Gradle ---
+        # Removido o plugin rust-android-gradle. Compilação manual via cargo-ndk abaixo.
         cat <<EOF > android/app/build.gradle
         plugins {
             id 'com.android.application'
             id 'kotlin-android'
-            id 'org.mozilla.rust-android-gradle.rust-android'
         }
 
         android {
@@ -226,6 +248,8 @@ jobs:
                 targetSdk 34
                 versionCode 1
                 versionName "1.0"
+                
+                // Indica ao Gradle que usaremos bibliotecas nativas pré-compiladas
                 ndk {
                     abiFilters "arm64-v8a", "x86_64"
                 }
@@ -247,50 +271,160 @@ jobs:
             buildFeatures {
                 viewBinding true
             }
-        }
-
-        cargo {
-            // FIX: Usar 'delegate.module' para evitar conflito com DependencyHandler.module()
-            delegate.module = "../../"
-            libname = "siena"
-            targets = ["arm64", "x86_64"]
-            profile = "release"
-            pythonCommand = "python3"
+            
+            // Define onde o Gradle vai encontrar as .so compiladas pelo cargo-ndk
+            sourceSets {
+                main {
+                    jniLibs.srcDirs = ['src/main/jniLibs']
+                }
+            }
         }
 
         dependencies {
-            implementation 'androidx.core:core-ktx:1.9.0'
+            implementation 'androidx.core:core-ktx:1.12.0'
             implementation 'androidx.appcompat:appcompat:1.6.1'
-            implementation 'com.google.android.material:material:1.9.0'
+            implementation 'com.google.android.material:material:1.11.0'
             implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-            implementation 'androidx.activity:activity-ktx:1.7.2'
+            implementation 'androidx.activity:activity-ktx:1.8.0'
         }
         EOF
 
-        # Manifest
+        # --- Manifest ---
         cat <<EOF > android/app/src/main/AndroidManifest.xml
         <?xml version="1.0" encoding="utf-8"?>
-        <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
-            <application android:allowBackup="true" android:label="Siena SNES" android:theme="@style/Theme.Siena" tools:targetApi="31">
-                <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape" android:configChanges="orientation|screenSize|keyboardHidden">
-                    <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+            xmlns:tools="http://schemas.android.com/tools">
+            
+            <!-- Permissões básicas. O SAF (Storage Access Framework) dispensa permissoes de arquivo. -->
+            
+            <application
+                android:allowBackup="true"
+                android:label="Siena SNES"
+                android:theme="@style/Theme.Siena"
+                tools:targetApi="31">
+                <activity
+                    android:name=".MainActivity"
+                    android:exported="true"
+                    android:screenOrientation="landscape"
+                    android:configChanges="orientation|screenSize|keyboardHidden">
+                    <intent-filter>
+                        <action android:name="android.intent.action.MAIN" />
+                        <category android:name="android.intent.category.LAUNCHER" />
+                    </intent-filter>
                 </activity>
             </application>
         </manifest>
         EOF
 
-        # Theme
+        # --- Themes ---
         cat <<EOF > android/app/src/main/res/values/themes.xml
-        <resources><style name="Theme.Siena" parent="Theme.AppCompat.NoActionBar"><item name="colorPrimary">#6200EE</item><item name="colorPrimaryDark">#3700B3</item><item name="colorAccent">#03DAC5</item></style></resources>
+        <resources>
+            <style name="Theme.Siena" parent="Theme.AppCompat.NoActionBar">
+                <item name="colorPrimary">#6200EE</item>
+                <item name="colorPrimaryDark">#3700B3</item>
+                <item name="colorAccent">#03DAC5</item>
+            </style>
+        </resources>
         EOF
 
-        # Kotlin: SienaNative.kt
+        # --- Layout: activity_main.xml ---
+        # AQUI ESTÁ O ARQUIVO QUE VOCÊ PEDIU
+        cat <<EOF > android/app/src/main/res/layout/activity_main.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+            xmlns:app="http://schemas.android.com/apk/res-auto"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#222222">
+
+            <!-- Tela do Emulador -->
+            <com.example.siena.EmulatorView
+                android:id="@+id/emulatorView"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintBottom_toTopOf="@+id/layoutControls"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent" />
+
+            <!-- Área de Loaders -->
+            <LinearLayout
+                android:id="@+id/layoutLoaders"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintBottom_toBottomOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent">
+                
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="SIENA SNES - Android 14"
+                    android:textColor="#FFFFFF"
+                    android:textSize="24sp"
+                    android:layout_marginBottom="20dp"
+                    android:gravity="center"/>
+
+                <Button
+                    android:id="@+id/btnLoadBios"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="1. Load BIOS (spc700.rom)" />
+
+                <Button
+                    android:id="@+id/btnLoadRom"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="2. Load Game (.sfc)" />
+            </LinearLayout>
+
+            <!-- Controles -->
+            <RelativeLayout
+                android:id="@+id/layoutControls"
+                android:layout_width="match_parent"
+                android:layout_height="200dp"
+                android:visibility="gone"
+                android:background="#33000000"
+                app:layout_constraintBottom_toBottomOf="parent">
+
+                <Button android:id="@+id/btnUp" android:text="^" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnDown" android:layout_alignStart="@+id/btnDown"/>
+                <Button android:id="@+id/btnDown" android:text="v" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginStart="80dp" android:layout_marginBottom="20dp"/>
+                <Button android:id="@+id/btnLeft" android:text="<" android:layout_width="60dp" android:layout_height="60dp" android:layout_toStartOf="@+id/btnDown" android:layout_alignTop="@+id/btnDown"/>
+                <Button android:id="@+id/btnRight" android:text=">" android:layout_width="60dp" android:layout_height="60dp" android:layout_toEndOf="@+id/btnDown" android:layout_alignTop="@+id/btnDown"/>
+
+                <Button android:id="@+id/btnA" android:text="A" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentEnd="true" android:layout_marginEnd="20dp" android:layout_alignTop="@+id/btnDown"/>
+                <Button android:id="@+id/btnB" android:text="B" android:layout_width="60dp" android:layout_height="60dp" android:layout_toStartOf="@+id/btnA" android:layout_alignTop="@+id/btnDown" android:layout_marginEnd="10dp"/>
+                <Button android:id="@+id/btnX" android:text="X" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnA" android:layout_alignStart="@+id/btnA"/>
+                <Button android:id="@+id/btnY" android:text="Y" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnB" android:layout_alignStart="@+id/btnB"/>
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_centerHorizontal="true"
+                    android:layout_alignParentBottom="true"
+                    android:layout_marginBottom="20dp">
+                    <Button android:id="@+id/btnSelect" android:text="Sel" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                    <Button android:id="@+id/btnStart" android:text="Start" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                </LinearLayout>
+
+                <Button android:id="@+id/btnL" android:text="L" android:layout_width="80dp" android:layout_height="50dp" android:layout_alignParentTop="true" android:layout_alignParentStart="true"/>
+                <Button android:id="@+id/btnR" android:text="R" android:layout_width="80dp" android:layout_height="50dp" android:layout_alignParentTop="true" android:layout_alignParentEnd="true"/>
+            </RelativeLayout>
+        </androidx.constraintlayout.widget.ConstraintLayout>
+        EOF
+
+        # --- Kotlin: SienaNative.kt ---
         cat <<EOF > android/app/src/main/java/com/example/siena/SienaNative.kt
         package com.example.siena
         object SienaNative {
             init { System.loadLibrary("siena") }
-            const val BTN_A=0; const val BTN_B=1; const val BTN_X=2; const val BTN_Y=3; const val BTN_START=4; const val BTN_SELECT=5;
-            const val BTN_UP=6; const val BTN_DOWN=7; const val BTN_LEFT=8; const val BTN_RIGHT=9; const val BTN_L=10; const val BTN_R=11;
+            const val BTN_A=0; const val BTN_B=1; const val BTN_X=2; const val BTN_Y=3;
+            const val BTN_START=4; const val BTN_SELECT=5; const val BTN_UP=6; const val BTN_DOWN=7;
+            const val BTN_LEFT=8; const val BTN_RIGHT=9; const val BTN_L=10; const val BTN_R=11;
+
             external fun init(r: ByteArray, i: ByteArray): Boolean
             external fun tickFrame()
             external fun getPixels(b: IntArray)
@@ -298,91 +432,174 @@ jobs:
         }
         EOF
 
-        # Kotlin: EmulatorView.kt
+        # --- Kotlin: EmulatorView.kt ---
         cat <<EOF > android/app/src/main/java/com/example/siena/EmulatorView.kt
         package com.example.siena
-        import android.content.Context; import android.graphics.*; import android.util.AttributeSet; import android.view.View
+        import android.content.Context
+        import android.graphics.*
+        import android.util.AttributeSet
+        import android.view.View
+
         class EmulatorView @JvmOverloads constructor(c: Context, a: AttributeSet? = null) : View(c, a) {
             private val bm: Bitmap = Bitmap.createBitmap(512, 448, Bitmap.Config.ARGB_8888)
             private val pb = IntArray(512 * 448)
-            private val dst = Rect(); private val pt = Paint(Paint.FILTER_BITMAP_FLAG)
+            private val src = Rect(0, 0, 512, 448)
+            private val dst = Rect()
+            private val pt = Paint(Paint.FILTER_BITMAP_FLAG)
+
             init { bm.eraseColor(Color.BLACK) }
-            fun updateFrame() { SienaNative.getPixels(pb); bm.setPixels(pb, 0, 512, 0, 0, 512, 448); invalidate() }
-            override fun onDraw(c: Canvas) { super.onDraw(c); dst.set(0, 0, width, height); c.drawBitmap(bm, null, dst, pt) }
+
+            fun updateFrame() {
+                SienaNative.getPixels(pb)
+                bm.setPixels(pb, 0, 512, 0, 0, 512, 448)
+                invalidate()
+            }
+
+            override fun onDraw(c: Canvas) {
+                super.onDraw(c)
+                dst.set(0, 0, width, height)
+                c.drawBitmap(bm, src, dst, pt)
+            }
         }
         EOF
 
-        # Kotlin: MainActivity.kt (SAF Storage)
+        # --- Kotlin: MainActivity.kt ---
         cat <<EOF > android/app/src/main/java/com/example/siena/MainActivity.kt
         package com.example.siena
-        import android.net.Uri; import android.os.Bundle; import android.view.MotionEvent; import android.view.View; import android.widget.Button; import android.widget.Toast
-        import androidx.activity.result.contract.ActivityResultContracts; import androidx.appcompat.app.AppCompatActivity
+        import android.net.Uri
+        import android.os.Bundle
+        import android.view.MotionEvent
+        import android.view.View
+        import android.widget.Button
+        import android.widget.Toast
+        import androidx.activity.result.contract.ActivityResultContracts
+        import androidx.appcompat.app.AppCompatActivity
         import com.example.siena.databinding.ActivityMainBinding
-        import java.io.ByteArrayOutputStream; import java.util.concurrent.Executors; import java.util.concurrent.ScheduledFuture; import java.util.concurrent.TimeUnit
+        import java.io.ByteArrayOutputStream
+        import java.io.InputStream
+        import java.util.concurrent.Executors
+        import java.util.concurrent.ScheduledFuture
+        import java.util.concurrent.TimeUnit
+
         class MainActivity : AppCompatActivity() {
             private lateinit var b: ActivityMainBinding
             private val exec = Executors.newSingleThreadScheduledExecutor()
             private var task: ScheduledFuture<*>? = null
             private var run = false
-            private var bios: ByteArray? = null; private var rom: ByteArray? = null
-            private val getBios = registerForActivityResult(ActivityResultContracts.GetContent()) { u -> u?.let { bios = read(it); Toast.makeText(this, "BIOS OK", 0).show(); tryStart() } }
-            private val getRom = registerForActivityResult(ActivityResultContracts.GetContent()) { u -> u?.let { rom = read(it); Toast.makeText(this, "ROM OK", 0).show(); tryStart() } }
-            override fun onCreate(s: Bundle?) { super.onCreate(s); b = ActivityMainBinding.inflate(layoutInflater); setContentView(b.root); ui() }
+            private var bios: ByteArray? = null
+            private var rom: ByteArray? = null
+
+            private val getBios = registerForActivityResult(ActivityResultContracts.GetContent()) { u ->
+                u?.let { 
+                    bios = read(it)
+                    Toast.makeText(this, "BIOS OK: " + bios?.size, Toast.LENGTH_SHORT).show()
+                    tryStart()
+                }
+            }
+
+            private val getRom = registerForActivityResult(ActivityResultContracts.GetContent()) { u ->
+                u?.let { 
+                    rom = read(it)
+                    Toast.makeText(this, "ROM OK: " + rom?.size, Toast.LENGTH_SHORT).show()
+                    tryStart()
+                }
+            }
+
+            override fun onCreate(s: Bundle?) {
+                super.onCreate(s)
+                b = ActivityMainBinding.inflate(layoutInflater)
+                setContentView(b.root)
+                ui()
+            }
+
             private fun ui() {
                 b.btnLoadBios.setOnClickListener { getBios.launch("*/*") }
                 b.btnLoadRom.setOnClickListener { getRom.launch("*/*") }
-                listOf(b.btnA to 0, b.btnB to 1, b.btnX to 2, b.btnY to 3, b.btnStart to 4, b.btnSelect to 5, b.btnUp to 6, b.btnDown to 7, b.btnLeft to 8, b.btnRight to 9, b.btnL to 10, b.btnR to 11).forEach { (btn, id) -> ctl(btn, id) }
+                
+                listOf(
+                    b.btnA to 0, b.btnB to 1, b.btnX to 2, b.btnY to 3,
+                    b.btnStart to 4, b.btnSelect to 5,
+                    b.btnUp to 6, b.btnDown to 7, b.btnLeft to 8, b.btnRight to 9,
+                    b.btnL to 10, b.btnR to 11
+                ).forEach { (btn, id) -> ctl(btn, id) }
             }
-            private fun ctl(btn: Button, id: Int) { btn.setOnTouchListener { _, e -> when(e.action) { MotionEvent.ACTION_DOWN -> { SienaNative.sendInput(id, true); true } MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { SienaNative.sendInput(id, false); true } else -> false } } }
+
+            private fun ctl(btn: Button, id: Int) {
+                btn.setOnTouchListener { _, e ->
+                    when(e.action) {
+                        MotionEvent.ACTION_DOWN -> { SienaNative.sendInput(id, true); true }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { SienaNative.sendInput(id, false); true }
+                        else -> false
+                    }
+                }
+            }
+
             private fun read(u: Uri): ByteArray {
-                val s = contentResolver.openInputStream(u); val o = ByteArrayOutputStream(); val buf = ByteArray(1024); var l: Int
+                val s = contentResolver.openInputStream(u)
+                val o = ByteArrayOutputStream()
+                val buf = ByteArray(1024)
+                var l: Int
                 s?.use { while (it.read(buf).also { l = it } != -1) o.write(buf, 0, l) }
                 return o.toByteArray()
             }
+
             private fun tryStart() {
                 if (bios != null && rom != null && !run) {
                     if (SienaNative.init(rom!!, bios!!)) {
-                        b.layoutLoaders.visibility = View.GONE; b.emulatorView.visibility = View.VISIBLE; b.layoutControls.visibility = View.VISIBLE; start()
-                    } else Toast.makeText(this, "Erro Init", 1).show()
+                        b.layoutLoaders.visibility = View.GONE
+                        b.emulatorView.visibility = View.VISIBLE
+                        b.layoutControls.visibility = View.VISIBLE
+                        start()
+                    } else {
+                        Toast.makeText(this, "Erro Init (ROM/IPL Invalidos)", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
-            private fun start() { run = true; task = exec.scheduleAtFixedRate({ if(run) { SienaNative.tickFrame(); runOnUiThread { b.emulatorView.updateFrame() } } }, 0, 16, TimeUnit.MILLISECONDS) }
-            override fun onDestroy() { super.onDestroy(); run = false; task?.cancel(true); exec.shutdown() }
+
+            private fun start() {
+                run = true
+                task = exec.scheduleAtFixedRate({
+                    if(run) {
+                        SienaNative.tickFrame()
+                        runOnUiThread { b.emulatorView.updateFrame() }
+                    }
+                }, 0, 16, TimeUnit.MILLISECONDS)
+            }
+
+            override fun onDestroy() {
+                super.onDestroy()
+                run = false
+                task?.cancel(true)
+                exec.shutdown()
+            }
         }
         EOF
 
-    # ---------------------------------------------------------
-    # 2. COMMIT E PUSH DAS MUDANÇAS
-    # ---------------------------------------------------------
-    - name: Commit and Push Changes
+    # =================================================================
+    # 4. COMMIT & PUSH
+    # =================================================================
+    - name: Commit Changes
       run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
         git add .
-        git commit -m "Auto-port: Add complete Android 14 Project via CI" || echo "No changes to commit"
+        git commit -m "Complete Android Port (Groovy+Manual NDK)" || echo "No changes"
         git push
 
-    # ---------------------------------------------------------
-    # 3. BUILD E ARTEFATO
-    # ---------------------------------------------------------
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+    # =================================================================
+    # 5. COMPILAÇÃO NATIVA E APK
+    # =================================================================
+    - name: Build Native Libs (cargo-ndk)
+      run: |
+        # Compila Rust para Android e coloca .so direto onde o Gradle espera
+        # Gradle (Groovy) está configurado para ler de 'src/main/jniLibs'
+        cargo ndk -t arm64-v8a -t x86_64 -o android/app/src/main/jniLibs build --release
 
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-
-    - name: Setup Rust Toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: aarch64-linux-android,x86_64-linux-android
-
-    - name: Install cargo-ndk
-      run: cargo install cargo-ndk
-
-    - name: Build APK with Gradle
+    - name: Build APK (Gradle)
       working-directory: android
-      run: gradle assembleDebug
+      run: |
+        chmod +x gradlew
+        ./gradlew assembleDebug
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
