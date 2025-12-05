@@ -183,7 +183,12 @@ jobs:
         buildscript { repositories { google(); mavenCentral() } dependencies { classpath("com.android.tools.build:gradle:8.1.0"); classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.0"); classpath("org.mozilla.rust-android-gradle:plugin:0.9.3") } }
         allprojects { repositories { google(); mavenCentral() } }
         EOF
-        echo 'rootProject.name = "Siena"\ninclude(":app")' > android/settings.gradle.kts
+        
+        # CORREÇÃO AQUI: Usando cat em vez de echo para evitar erro de nova linha
+        cat <<EOF > android/settings.gradle.kts
+        rootProject.name = "Siena"
+        include(":app")
+        EOF
         
         cat <<EOF > android/app/build.gradle.kts
         plugins { id("com.android.application"); id("org.jetbrains.kotlin.android"); id("org.mozilla.rust-android-gradle.rust-android") }
@@ -244,7 +249,7 @@ jobs:
         }
         EOF
 
-        # Kotlin: MainActivity.kt
+        # Kotlin: MainActivity.kt (SAF Storage)
         cat <<EOF > android/app/src/main/java/com/example/siena/MainActivity.kt
         package com.example.siena
         import android.net.Uri; import android.os.Bundle; import android.view.MotionEvent; import android.view.View; import android.widget.Button; import android.widget.Toast
