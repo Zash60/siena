@@ -1,10 +1,10 @@
 name: Port to Android 14 & Build
 
 on:
-  workflow_dispatch: # Permite iniciar manualmente pelo botão
+  workflow_dispatch:
 
 permissions:
-  contents: write # Permissão CRÍTICA para conseguir fazer o Push de volta
+  contents: write
 
 jobs:
   convert-and-build:
@@ -16,7 +16,7 @@ jobs:
         submodules: recursive
 
     # ---------------------------------------------------------
-    # 1. MODIFICAÇÃO DO CÓDIGO (RUST & KOTLIN)
+    # 1. MODIFICAÇÃO E CRIAÇÃO DOS ARQUIVOS
     # ---------------------------------------------------------
     - name: Apply Android Port Modifications
       run: |
@@ -25,15 +25,12 @@ jobs:
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
         echo "🔧 Modificando visibilidade das Structs Rust..."
-        # Torna campos públicos para o JNI acessar
-        # Usa || true para não falhar se já tiver sido modificado anteriormente
         sed -i 's/cpu: Cpu65816/pub cpu: Cpu65816/' src/snes/emulator.rs || true
         sed -i 's/joypad_senders: Option/pub joypad_senders: Option/' src/snes/emulator.rs || true
         sed -i 's/ppu: PPU/pub ppu: PPU/' src/snes/bus/mainbus.rs || true
         sed -i 's/renderer: Option/pub renderer: Option/' src/snes/ppu/ppu.rs || true
 
         echo "📦 Atualizando Cargo.toml..."
-        # Evita duplicação se já rodou antes
         if ! grep -q "crate-type" Cargo.toml; then
         cat <<EOF >> Cargo.toml
 
@@ -90,7 +87,6 @@ jobs:
                 let mut pixels = self.pixel_data.lock().unwrap();
                 for (i, chunk) in self.display_buffer.chunks_exact(4).enumerate() {
                     if i < pixels.len() {
-                        // Siena usa AtomicU8 RGB, Android usa ARGB Int
                         let r = chunk[0].load(Ordering::Relaxed) as u32;
                         let g = chunk[1].load(Ordering::Relaxed) as u32;
                         let b = chunk[2].load(Ordering::Relaxed) as u32;
@@ -118,7 +114,6 @@ jobs:
         use crate::snes::ppu::ppu::{SCREEN_WIDTH, SCREEN_HEIGHT};
         use std::sync::{Arc, Mutex};
 
-        // Singleton Unsafe (Padrão para emuladores simples em JNI)
         static mut EMULATOR: Option<Emulator<AndroidRenderer>> = None;
         static mut JOYPAD_SENDERS: Option<[crossbeam_channel::Sender<JoypadEvent>; JOYPAD_COUNT]> = None;
 
@@ -142,7 +137,6 @@ jobs:
 
             match emu_res {
                 Ok(mut emu) => {
-                    // Recaptura os senders internos se o emulador os recriou
                     if let Ok(s) = emu.get_joypad_senders() { unsafe { JOYPAD_SENDERS = Some(s); } }
                     unsafe { EMULATOR = Some(emu); }
                     1
@@ -154,7 +148,6 @@ jobs:
         #[no_mangle]
         pub extern "system" fn Java_com_example_siena_SienaNative_tickFrame(_e: JNIEnv, _c: JClass) {
             unsafe { if let Some(emu) = &mut EMULATOR {
-                // Roda ciclos suficientes para um frame (~60fps)
                 let mut ticks = 0;
                 while ticks < 300_000 { 
                     match emu.tick() { Ok(_) => ticks += 80, Err(_) => break, } 
@@ -251,7 +244,7 @@ jobs:
         }
         EOF
 
-        # Kotlin: MainActivity.kt (SAF Storage)
+        # Kotlin: MainActivity.kt
         cat <<EOF > android/app/src/main/java/com/example/siena/MainActivity.kt
         package com.example.siena
         import android.net.Uri; import android.os.Bundle; import android.view.MotionEvent; import android.view.View; import android.widget.Button; import android.widget.Toast
@@ -298,7 +291,7 @@ jobs:
             <LinearLayout android:id="@+id/layoutLoaders" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="vertical" app:layout_constraintTop_toTopOf="parent" app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintEnd_toEndOf="parent">
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SIENA SNES" android:textColor="#FFFFFF" android:textSize="24sp" android:layout_marginBottom="20dp"/>
                 <Button android:id="@+id/btnLoadBios" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="1. Load BIOS (spc700.rom)" />
-                <Button android:id="@+id/btnLoadRom" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="2. Load Game" />
+                <Button android:id="@+id/btnLoadRom" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="2. Load Game (.sfc)" />
             </LinearLayout>
             <RelativeLayout android:id="@+id/layoutControls" android:layout_width="match_parent" android:layout_height="200dp" android:visibility="gone" android:background="#33000000" app:layout_constraintBottom_toBottomOf="parent">
                 <Button android:id="@+id/btnUp" android:text="^" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnDown" android:layout_alignStart="@+id/btnDown"/>
@@ -350,9 +343,7 @@ jobs:
 
     - name: Build APK with Gradle
       working-directory: android
-      run: |
-        chmod +x gradlew
-        ./gradlew assembleDebug
+      run: gradle assembleDebug
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
