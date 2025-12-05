@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.example.siena"
     compileSdk = 34
+    ndkVersion = "25.2.9519653"
 
     defaultConfig {
         applicationId = "com.example.siena"
@@ -39,7 +40,8 @@ android {
 }
 
 cargo {
-    module = "../../"
+    // FIX: Use 'this.module' para evitar conflito com a função module() do Gradle
+    this.module = "../../"
     libname = "siena"
     targets = listOf("arm64", "x86_64")
     profile = "release"

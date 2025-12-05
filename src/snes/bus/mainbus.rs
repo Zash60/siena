@@ -51,7 +51,7 @@ where
     pub apu: Arc<Mutex<Apu>>,
 
     /// Picture Processing Unit
-    pub pub pub pub pub pub pub ppu: PPU<TRenderer>,
+    pub pub pub pub pub pub pub pub ppu: PPU<TRenderer>,
 
     /// MEMSEL - Memory-2 Waitstate Control
     memsel: u8,
@@ -268,7 +268,7 @@ where
             hdmaen: 0,
             joypads: Some(joypads),
 
-            pub pub pub pub pub pub ppu: PPU::<TRenderer>::new(renderer, fps, videoformat),
+            pub pub pub pub pub pub pub ppu: PPU::<TRenderer>::new(renderer, fps, videoformat),
             apu: Arc::new(Mutex::new(Apu::new(apu_ipl, apu_verbose))),
 
             memsel: 0,
