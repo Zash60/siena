@@ -25,7 +25,6 @@ jobs:
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
         echo "🔧 Modificando visibilidade das Structs Rust..."
-        # || true garante que não falhe se já tiver sido modificado
         sed -i 's/cpu: Cpu65816/pub cpu: Cpu65816/' src/snes/emulator.rs || true
         sed -i 's/joypad_senders: Option/pub joypad_senders: Option/' src/snes/emulator.rs || true
         sed -i 's/ppu: PPU/pub ppu: PPU/' src/snes/bus/mainbus.rs || true
@@ -174,13 +173,13 @@ jobs:
         }
         EOF
 
-        echo "📱 Gerando Projeto Android (Kotlin + Gradle)..."
+        echo "📱 Gerando Projeto Android (Groovy + Gradle)..."
         mkdir -p android/app/src/main/java/com/example/siena
         mkdir -p android/app/src/main/res/layout
         mkdir -p android/app/src/main/res/values
 
-        # Gradle Root
-        cat <<EOF > android/build.gradle.kts
+        # Gradle Root (Groovy) - Sem conflitos de DSL
+        cat <<EOF > android/build.gradle
         buildscript {
             repositories {
                 google()
@@ -188,9 +187,9 @@ jobs:
                 gradlePluginPortal()
             }
             dependencies {
-                classpath("com.android.tools.build:gradle:8.1.0")
-                classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.0")
-                classpath("org.mozilla.rust-android-gradle:plugin:0.9.3")
+                classpath 'com.android.tools.build:gradle:8.1.0'
+                classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.0'
+                classpath 'org.mozilla.rust-android-gradle:plugin:0.9.3'
             }
         }
         allprojects {
@@ -199,75 +198,72 @@ jobs:
                 mavenCentral()
             }
         }
-        tasks.register<Delete>("clean") {
-            delete(rootProject.layout.buildDirectory)
+        task clean(type: Delete) {
+            delete rootProject.buildDir
         }
         EOF
         
-        # Settings Gradle
-        cat <<EOF > android/settings.gradle.kts
+        # Settings (Groovy)
+        cat <<EOF > android/settings.gradle
         rootProject.name = "Siena"
-        include(":app")
+        include ':app'
         EOF
         
-        # App Gradle - AQUI ESTAVA O ERRO, CORRIGIDO COM 'this.module'
-        cat <<EOF > android/app/build.gradle.kts
+        # App Gradle (Groovy) - Aqui 'module' é interpretado corretamente
+        cat <<EOF > android/app/build.gradle
         plugins {
-            id("com.android.application")
-            id("org.jetbrains.kotlin.android")
-            id("org.mozilla.rust-android-gradle.rust-android")
+            id 'com.android.application'
+            id 'kotlin-android'
+            id 'org.mozilla.rust-android-gradle.rust-android'
         }
 
         android {
-            namespace = "com.example.siena"
-            compileSdk = 34
-            ndkVersion = "25.2.9519653"
+            namespace 'com.example.siena'
+            compileSdk 34
 
             defaultConfig {
-                applicationId = "com.example.siena"
-                minSdk = 26
-                targetSdk = 34
-                versionCode = 1
-                versionName = "1.0"
+                applicationId "com.example.siena"
+                minSdk 26
+                targetSdk 34
+                versionCode 1
+                versionName "1.0"
                 ndk {
-                    abiFilters.add("arm64-v8a")
-                    abiFilters.add("x86_64")
+                    abiFilters "arm64-v8a", "x86_64"
                 }
             }
 
             buildTypes {
                 release {
-                    isMinifyEnabled = true
-                    proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+                    minifyEnabled true
+                    proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
                 }
             }
             compileOptions {
-                sourceCompatibility = JavaVersion.VERSION_1_8
-                targetCompatibility = JavaVersion.VERSION_1_8
+                sourceCompatibility JavaVersion.VERSION_1_8
+                targetCompatibility JavaVersion.VERSION_1_8
             }
             kotlinOptions {
-                jvmTarget = "1.8"
+                jvmTarget = '1.8'
             }
             buildFeatures {
-                viewBinding = true
+                viewBinding true
             }
         }
 
         cargo {
-            // FIX: Use 'this.module' para evitar conflito com a função module() do Gradle
-            this.module = "../../"
+            module = "../../"
             libname = "siena"
-            targets = listOf("arm64", "x86_64")
+            targets = ["arm64", "x86_64"]
             profile = "release"
             pythonCommand = "python3"
         }
 
         dependencies {
-            implementation("androidx.core:core-ktx:1.9.0")
-            implementation("androidx.appcompat:appcompat:1.6.1")
-            implementation("com.google.android.material:material:1.9.0")
-            implementation("androidx.constraintlayout:constraintlayout:2.1.4")
-            implementation("androidx.activity:activity-ktx:1.7.2")
+            implementation 'androidx.core:core-ktx:1.9.0'
+            implementation 'androidx.appcompat:appcompat:1.6.1'
+            implementation 'com.google.android.material:material:1.9.0'
+            implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+            implementation 'androidx.activity:activity-ktx:1.7.2'
         }
         EOF
 
@@ -316,7 +312,7 @@ jobs:
         }
         EOF
 
-        # Kotlin: MainActivity.kt
+        # Kotlin: MainActivity.kt (SAF Storage)
         cat <<EOF > android/app/src/main/java/com/example/siena/MainActivity.kt
         package com.example.siena
         import android.net.Uri; import android.os.Bundle; import android.view.MotionEvent; import android.view.View; import android.widget.Button; import android.widget.Toast
