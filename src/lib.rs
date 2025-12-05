@@ -12,3 +12,4 @@ pub mod util;
 
 #[cfg(test)]
 pub mod test;
+#[cfg(target_os = "android")] pub mod lib_jni;
