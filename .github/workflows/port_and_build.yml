@@ -1,0 +1,367 @@
+name: Port to Android 14 & Build
+
+on:
+  workflow_dispatch: # Permite iniciar manualmente pelo botão
+
+permissions:
+  contents: write # Permissão CRÍTICA para conseguir fazer o Push de volta
+
+jobs:
+  convert-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    # ---------------------------------------------------------
+    # 1. MODIFICAÇÃO DO CÓDIGO (RUST & KOTLIN)
+    # ---------------------------------------------------------
+    - name: Apply Android Port Modifications
+      run: |
+        echo "🔧 Configurando Git..."
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+        echo "🔧 Modificando visibilidade das Structs Rust..."
+        # Torna campos públicos para o JNI acessar
+        sed -i 's/cpu: Cpu65816/pub cpu: Cpu65816/' src/snes/emulator.rs
+        sed -i 's/joypad_senders: Option/pub joypad_senders: Option/' src/snes/emulator.rs
+        sed -i 's/ppu: PPU/pub ppu: PPU/' src/snes/bus/mainbus.rs
+        sed -i 's/renderer: Option/pub renderer: Option/' src/snes/ppu/ppu.rs
+
+        echo "📦 Atualizando Cargo.toml..."
+        # Evita duplicação se já rodou antes
+        if ! grep -q "crate-type" Cargo.toml; then
+        cat <<EOF >> Cargo.toml
+
+        [lib]
+        crate-type = ["cdylib", "lib"]
+
+        [dependencies.jni]
+        version = "0.21.1"
+
+        [dependencies.android_logger]
+        version = "0.13"
+
+        [dependencies.log]
+        version = "0.4"
+        EOF
+        fi
+
+        echo "📚 Atualizando lib.rs..."
+        if ! grep -q "lib_jni" src/lib.rs; then
+           echo '#[cfg(target_os = "android")] pub mod lib_jni;' >> src/lib.rs
+        fi
+
+        echo "🦀 Criando src/frontend/android.rs..."
+        mkdir -p src/frontend
+        cat <<EOF > src/frontend/android.rs
+        use super::{new_displaybuffer, DisplayBuffer, Renderer};
+        use anyhow::Result;
+        use std::sync::{Arc, Mutex};
+        use std::sync::atomic::Ordering;
+
+        pub struct AndroidRenderer {
+            pub display_buffer: DisplayBuffer,
+            pub pixel_data: Arc<Mutex<Vec<u32>>>,
+            width: usize,
+            height: usize,
+        }
+
+        impl AndroidRenderer {
+            pub fn get_pixels(&self) -> Vec<u32> {
+                self.pixel_data.lock().unwrap().clone()
+            }
+        }
+
+        impl Renderer for AndroidRenderer {
+            fn new(w: usize, h: usize) -> Result<Self> {
+                Ok(Self {
+                    display_buffer: new_displaybuffer(w, h),
+                    pixel_data: Arc::new(Mutex::new(vec![0; w * h])),
+                    width: w, height: h,
+                })
+            }
+
+            fn update(&mut self) -> Result<()> {
+                let mut pixels = self.pixel_data.lock().unwrap();
+                for (i, chunk) in self.display_buffer.chunks_exact(4).enumerate() {
+                    if i < pixels.len() {
+                        // Siena usa AtomicU8 RGB, Android usa ARGB Int
+                        let r = chunk[0].load(Ordering::Relaxed) as u32;
+                        let g = chunk[1].load(Ordering::Relaxed) as u32;
+                        let b = chunk[2].load(Ordering::Relaxed) as u32;
+                        pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+                    }
+                }
+                Ok(())
+            }
+
+            fn get_buffer(&mut self) -> DisplayBuffer {
+                Arc::clone(&self.display_buffer)
+            }
+        }
+        EOF
+
+        echo "bridge JNI: src/lib_jni.rs..."
+        cat <<EOF > src/lib_jni.rs
+        use jni::JNIEnv;
+        use jni::objects::{JClass, JIntArray};
+        use jni::sys::{jboolean, jint, jbyteArray};
+        use crate::snes::emulator::Emulator;
+        use crate::snes::cartridge::{Cartridge, VideoFormat};
+        use crate::snes::joypad::{Joypad, JoypadEvent, Button, JOYPAD_COUNT};
+        use crate::frontend::android::AndroidRenderer;
+        use crate::snes::ppu::ppu::{SCREEN_WIDTH, SCREEN_HEIGHT};
+        use std::sync::{Arc, Mutex};
+
+        // Singleton Unsafe (Padrão para emuladores simples em JNI)
+        static mut EMULATOR: Option<Emulator<AndroidRenderer>> = None;
+        static mut JOYPAD_SENDERS: Option<[crossbeam_channel::Sender<JoypadEvent>; JOYPAD_COUNT]> = None;
+
+        #[no_mangle]
+        pub extern "system" fn Java_com_example_siena_SienaNative_init(env: JNIEnv, _c: JClass, rom: jbyteArray, ipl: jbyteArray) -> jboolean {
+            android_logger::init_once(android_logger::Config::default().with_min_level(log::Level::Info));
+            
+            let r_vec = match env.convert_byte_array(rom) { Ok(v) => v, Err(_) => return 0 };
+            let i_vec = match env.convert_byte_array(ipl) { Ok(v) => v, Err(_) => return 0 };
+            
+            if r_vec.is_empty() || i_vec.len() != 64 { return 0; }
+
+            let cart = match Cartridge::load(&r_vec, None) { Ok(c) => c, Err(_) => return 0 };
+            let renderer = AndroidRenderer::new(SCREEN_WIDTH, SCREEN_HEIGHT).unwrap();
+            let (_, senders) = Joypad::new_channel_all();
+            
+            unsafe { JOYPAD_SENDERS = Some(senders); }
+            if let Some(s) = unsafe { &JOYPAD_SENDERS } { let _ = s[0].send(JoypadEvent::Connect); }
+
+            let emu_res = Emulator::new(cart, &i_vec, renderer, Some(VideoFormat::NTSC));
+
+            match emu_res {
+                Ok(mut emu) => {
+                    // Recaptura os senders internos se o emulador os recriou
+                    if let Ok(s) = emu.get_joypad_senders() { unsafe { JOYPAD_SENDERS = Some(s); } }
+                    unsafe { EMULATOR = Some(emu); }
+                    1
+                }
+                Err(_) => 0
+            }
+        }
+
+        #[no_mangle]
+        pub extern "system" fn Java_com_example_siena_SienaNative_tickFrame(_e: JNIEnv, _c: JClass) {
+            unsafe { if let Some(emu) = &mut EMULATOR {
+                // Roda ciclos suficientes para um frame (~60fps)
+                let mut ticks = 0;
+                while ticks < 300_000 { 
+                    match emu.tick() { Ok(_) => ticks += 80, Err(_) => break, } 
+                }
+            }}
+        }
+
+        #[no_mangle]
+        pub extern "system" fn Java_com_example_siena_SienaNative_getPixels(env: JNIEnv, _c: JClass, buf: JIntArray) {
+            unsafe { if let Some(emu) = &mut EMULATOR {
+                if let Some(rend) = &emu.cpu.bus.ppu.renderer {
+                    let p = rend.get_pixels();
+                    let _ = env.set_int_array_region(buf, 0, p.iter().map(|&x| x as i32).collect::<Vec<i32>>().as_slice());
+                }
+            }}
+        }
+
+        #[no_mangle]
+        pub extern "system" fn Java_com_example_siena_SienaNative_sendInput(_e: JNIEnv, _c: JClass, id: jint, down: jboolean) {
+            let b = match id { 0=>Button::A, 1=>Button::B, 2=>Button::X, 3=>Button::Y, 4=>Button::Start, 5=>Button::Select, 6=>Button::Up, 7=>Button::Down, 8=>Button::Left, 9=>Button::Right, 10=>Button::L, 11=>Button::R, _=>return };
+            let evt = if down == 1 { JoypadEvent::Down(b) } else { JoypadEvent::Up(b) };
+            unsafe { if let Some(s) = &JOYPAD_SENDERS { let _ = s[0].send(evt); } }
+        }
+        EOF
+
+        echo "📱 Gerando Projeto Android (Kotlin + Gradle)..."
+        mkdir -p android/app/src/main/java/com/example/siena
+        mkdir -p android/app/src/main/res/layout
+        mkdir -p android/app/src/main/res/values
+
+        # Gradle Files
+        cat <<EOF > android/build.gradle.kts
+        buildscript { repositories { google(); mavenCentral() } dependencies { classpath("com.android.tools.build:gradle:8.1.0"); classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.0"); classpath("org.mozilla.rust-android-gradle:plugin:0.9.3") } }
+        allprojects { repositories { google(); mavenCentral() } }
+        EOF
+        echo 'rootProject.name = "Siena"\ninclude(":app")' > android/settings.gradle.kts
+        
+        cat <<EOF > android/app/build.gradle.kts
+        plugins { id("com.android.application"); id("org.jetbrains.kotlin.android"); id("org.mozilla.rust-android-gradle.rust-android") }
+        android {
+            namespace = "com.example.siena"
+            compileSdk = 34
+            defaultConfig { applicationId = "com.example.siena"; minSdk = 26; targetSdk = 34; versionCode = 1; versionName = "1.0"; ndk { abiFilters.add("arm64-v8a"); abiFilters.add("x86_64") } }
+            buildFeatures { viewBinding = true }
+            compileOptions { sourceCompatibility = JavaVersion.VERSION_1_8; targetCompatibility = JavaVersion.VERSION_1_8 }
+            kotlinOptions { jvmTarget = "1.8" }
+        }
+        cargo { module = "../../"; libname = "siena"; targets = listOf("arm64", "x86_64"); profile = "release"; pythonCommand = "python3" }
+        dependencies { implementation("androidx.core:core-ktx:1.9.0"); implementation("androidx.appcompat:appcompat:1.6.1"); implementation("com.google.android.material:material:1.9.0"); implementation("androidx.constraintlayout:constraintlayout:2.1.4"); implementation("androidx.activity:activity-ktx:1.7.2") }
+        EOF
+
+        # Manifest
+        cat <<EOF > android/app/src/main/AndroidManifest.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+            <application android:allowBackup="true" android:label="Siena SNES" android:theme="@style/Theme.Siena" tools:targetApi="31">
+                <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape" android:configChanges="orientation|screenSize|keyboardHidden">
+                    <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+                </activity>
+            </application>
+        </manifest>
+        EOF
+
+        # Theme
+        cat <<EOF > android/app/src/main/res/values/themes.xml
+        <resources><style name="Theme.Siena" parent="Theme.AppCompat.NoActionBar"><item name="colorPrimary">#6200EE</item><item name="colorPrimaryDark">#3700B3</item><item name="colorAccent">#03DAC5</item></style></resources>
+        EOF
+
+        # Kotlin: SienaNative.kt
+        cat <<EOF > android/app/src/main/java/com/example/siena/SienaNative.kt
+        package com.example.siena
+        object SienaNative {
+            init { System.loadLibrary("siena") }
+            const val BTN_A=0; const val BTN_B=1; const val BTN_X=2; const val BTN_Y=3; const val BTN_START=4; const val BTN_SELECT=5;
+            const val BTN_UP=6; const val BTN_DOWN=7; const val BTN_LEFT=8; const val BTN_RIGHT=9; const val BTN_L=10; const val BTN_R=11;
+            external fun init(r: ByteArray, i: ByteArray): Boolean
+            external fun tickFrame()
+            external fun getPixels(b: IntArray)
+            external fun sendInput(id: Int, p: Boolean)
+        }
+        EOF
+
+        # Kotlin: EmulatorView.kt
+        cat <<EOF > android/app/src/main/java/com/example/siena/EmulatorView.kt
+        package com.example.siena
+        import android.content.Context; import android.graphics.*; import android.util.AttributeSet; import android.view.View
+        class EmulatorView @JvmOverloads constructor(c: Context, a: AttributeSet? = null) : View(c, a) {
+            private val bm: Bitmap = Bitmap.createBitmap(512, 448, Bitmap.Config.ARGB_8888)
+            private val pb = IntArray(512 * 448)
+            private val dst = Rect(); private val pt = Paint(Paint.FILTER_BITMAP_FLAG)
+            init { bm.eraseColor(Color.BLACK) }
+            fun updateFrame() { SienaNative.getPixels(pb); bm.setPixels(pb, 0, 512, 0, 0, 512, 448); invalidate() }
+            override fun onDraw(c: Canvas) { super.onDraw(c); dst.set(0, 0, width, height); c.drawBitmap(bm, null, dst, pt) }
+        }
+        EOF
+
+        # Kotlin: MainActivity.kt (SAF Storage)
+        cat <<EOF > android/app/src/main/java/com/example/siena/MainActivity.kt
+        package com.example.siena
+        import android.net.Uri; import android.os.Bundle; import android.view.MotionEvent; import android.view.View; import android.widget.Button; import android.widget.Toast
+        import androidx.activity.result.contract.ActivityResultContracts; import androidx.appcompat.app.AppCompatActivity
+        import com.example.siena.databinding.ActivityMainBinding
+        import java.io.ByteArrayOutputStream; import java.util.concurrent.Executors; import java.util.concurrent.ScheduledFuture; import java.util.concurrent.TimeUnit
+        class MainActivity : AppCompatActivity() {
+            private lateinit var b: ActivityMainBinding
+            private val exec = Executors.newSingleThreadScheduledExecutor()
+            private var task: ScheduledFuture<*>? = null
+            private var run = false
+            private var bios: ByteArray? = null; private var rom: ByteArray? = null
+            private val getBios = registerForActivityResult(ActivityResultContracts.GetContent()) { u -> u?.let { bios = read(it); Toast.makeText(this, "BIOS OK", 0).show(); tryStart() } }
+            private val getRom = registerForActivityResult(ActivityResultContracts.GetContent()) { u -> u?.let { rom = read(it); Toast.makeText(this, "ROM OK", 0).show(); tryStart() } }
+            override fun onCreate(s: Bundle?) { super.onCreate(s); b = ActivityMainBinding.inflate(layoutInflater); setContentView(b.root); ui() }
+            private fun ui() {
+                b.btnLoadBios.setOnClickListener { getBios.launch("*/*") }
+                b.btnLoadRom.setOnClickListener { getRom.launch("*/*") }
+                listOf(b.btnA to 0, b.btnB to 1, b.btnX to 2, b.btnY to 3, b.btnStart to 4, b.btnSelect to 5, b.btnUp to 6, b.btnDown to 7, b.btnLeft to 8, b.btnRight to 9, b.btnL to 10, b.btnR to 11).forEach { (btn, id) -> ctl(btn, id) }
+            }
+            private fun ctl(btn: Button, id: Int) { btn.setOnTouchListener { _, e -> when(e.action) { MotionEvent.ACTION_DOWN -> { SienaNative.sendInput(id, true); true } MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { SienaNative.sendInput(id, false); true } else -> false } } }
+            private fun read(u: Uri): ByteArray {
+                val s = contentResolver.openInputStream(u); val o = ByteArrayOutputStream(); val buf = ByteArray(1024); var l: Int
+                s?.use { while (it.read(buf).also { l = it } != -1) o.write(buf, 0, l) }
+                return o.toByteArray()
+            }
+            private fun tryStart() {
+                if (bios != null && rom != null && !run) {
+                    if (SienaNative.init(rom!!, bios!!)) {
+                        b.layoutLoaders.visibility = View.GONE; b.emulatorView.visibility = View.VISIBLE; b.layoutControls.visibility = View.VISIBLE; start()
+                    } else Toast.makeText(this, "Erro Init", 1).show()
+                }
+            }
+            private fun start() { run = true; task = exec.scheduleAtFixedRate({ if(run) { SienaNative.tickFrame(); runOnUiThread { b.emulatorView.updateFrame() } } }, 0, 16, TimeUnit.MILLISECONDS) }
+            override fun onDestroy() { super.onDestroy(); run = false; task?.cancel(true); exec.shutdown() }
+        }
+        EOF
+
+        # Layout XML
+        cat <<EOF > android/app/src/main/res/layout/activity_main.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#222222">
+            <com.example.siena.EmulatorView android:id="@+id/emulatorView" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone" app:layout_constraintTop_toTopOf="parent" app:layout_constraintBottom_toTopOf="@+id/layoutControls" app:layout_constraintStart_toStartOf="parent" app:layout_constraintEnd_toEndOf="parent" />
+            <LinearLayout android:id="@+id/layoutLoaders" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="vertical" app:layout_constraintTop_toTopOf="parent" app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintEnd_toEndOf="parent">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SIENA SNES" android:textColor="#FFFFFF" android:textSize="24sp" android:layout_marginBottom="20dp"/>
+                <Button android:id="@+id/btnLoadBios" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="1. Load BIOS (spc700.rom)" />
+                <Button android:id="@+id/btnLoadRom" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="2. Load Game" />
+            </LinearLayout>
+            <RelativeLayout android:id="@+id/layoutControls" android:layout_width="match_parent" android:layout_height="200dp" android:visibility="gone" android:background="#33000000" app:layout_constraintBottom_toBottomOf="parent">
+                <Button android:id="@+id/btnUp" android:text="^" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnDown" android:layout_alignStart="@+id/btnDown"/>
+                <Button android:id="@+id/btnDown" android:text="v" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginStart="80dp" android:layout_marginBottom="20dp"/>
+                <Button android:id="@+id/btnLeft" android:text="<" android:layout_width="60dp" android:layout_height="60dp" android:layout_toStartOf="@+id/btnDown" android:layout_alignTop="@+id/btnDown"/>
+                <Button android:id="@+id/btnRight" android:text=">" android:layout_width="60dp" android:layout_height="60dp" android:layout_toEndOf="@+id/btnDown" android:layout_alignTop="@+id/btnDown"/>
+                <Button android:id="@+id/btnA" android:text="A" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentEnd="true" android:layout_marginEnd="20dp" android:layout_alignTop="@+id/btnDown"/>
+                <Button android:id="@+id/btnB" android:text="B" android:layout_width="60dp" android:layout_height="60dp" android:layout_toStartOf="@+id/btnA" android:layout_alignTop="@+id/btnDown" android:layout_marginEnd="10dp"/>
+                <Button android:id="@+id/btnX" android:text="X" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnA" android:layout_alignStart="@+id/btnA"/>
+                <Button android:id="@+id/btnY" android:text="Y" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnB" android:layout_alignStart="@+id/btnB"/>
+                <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_centerHorizontal="true" android:layout_alignParentBottom="true" android:layout_marginBottom="20dp">
+                    <Button android:id="@+id/btnSelect" android:text="Sel" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                    <Button android:id="@+id/btnStart" android:text="Start" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                </LinearLayout>
+                <Button android:id="@+id/btnL" android:text="L" android:layout_width="80dp" android:layout_height="50dp" android:layout_alignParentTop="true" android:layout_alignParentStart="true"/>
+                <Button android:id="@+id/btnR" android:text="R" android:layout_width="80dp" android:layout_height="50dp" android:layout_alignParentTop="true" android:layout_alignParentEnd="true"/>
+            </RelativeLayout>
+        </androidx.constraintlayout.widget.ConstraintLayout>
+        EOF
+
+    # ---------------------------------------------------------
+    # 2. COMMIT E PUSH DAS MUDANÇAS
+    # ---------------------------------------------------------
+    - name: Commit and Push Changes
+      run: |
+        git add .
+        git commit -m "Auto-port: Add complete Android 14 Project via CI" || echo "No changes to commit"
+        git push
+
+    # ---------------------------------------------------------
+    # 3. BUILD E ARTEFATO
+    # ---------------------------------------------------------
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v2
+
+    - name: Setup Rust Toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: aarch64-linux-android
+        override: true
+
+    - name: Install cargo-ndk
+      run: cargo install cargo-ndk
+
+    - name: Add Android Targets
+      run: |
+        rustup target add aarch64-linux-android
+        rustup target add x86_64-linux-android
+
+    - name: Build APK with Gradle
+      working-directory: android
+      run: |
+        chmod +x gradlew
+        ./gradlew assembleDebug
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: Siena-Android-APK
+        path: android/app/build/outputs/apk/debug/app-debug.apk
