@@ -1,1 +1,2 @@
-rootProject.name = "Siena"\ninclude(":app")
+rootProject.name = "Siena"
+include(":app")

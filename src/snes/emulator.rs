@@ -34,8 +34,8 @@ pub struct Emulator<T>
 where
     T: Renderer,
 {
-    pub pub cpu: Cpu65816<Mainbus<T>>,
-    pub pub joypad_senders: Option<[JoypadEventSender; JOYPAD_COUNT]>,
+    pub pub pub cpu: Cpu65816<Mainbus<T>>,
+    pub pub pub joypad_senders: Option<[JoypadEventSender; JOYPAD_COUNT]>,
     schedule_next: EnumMap<Schedule, Ticks>,
     schedule_ticks: Ticks,
 }
@@ -122,7 +122,7 @@ where
         //Deserialize::deserialize_in_place(&mut deserializer, &mut cpu)?;
 
         // Until then..
-        let mut new_pub pub cpu: Cpu65816<Mainbus<T>> = Deserialize::deserialize(&mut deserializer)?;
+        let mut new_pub pub pub cpu: Cpu65816<Mainbus<T>> = Deserialize::deserialize(&mut deserializer)?;
         // ..and move all the non-serializable stuff over.
         new_cpu.bus.ppu.renderer = std::mem::replace(&mut self.cpu.bus.ppu.renderer, None);
         new_cpu.bus.joypads = std::mem::replace(&mut self.cpu.bus.joypads, None);
