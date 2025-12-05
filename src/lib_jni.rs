@@ -1,6 +1,6 @@
 use jni::JNIEnv;
-use jni::objects::{JClass, JIntArray};
-use jni::sys::{jboolean, jint, jbyteArray};
+use jni::objects::{JClass, JIntArray, JByteArray};
+use jni::sys::{jboolean, jint};
 use crate::snes::emulator::Emulator;
 use crate::snes::cartridge::{Cartridge, VideoFormat};
 use crate::snes::joypad::{Joypad, JoypadEvent, Button, JOYPAD_COUNT};
@@ -12,11 +12,11 @@ static mut EMULATOR: Option<Emulator<AndroidRenderer>> = None;
 static mut JOYPAD_SENDERS: Option<[crossbeam_channel::Sender<JoypadEvent>; JOYPAD_COUNT]> = None;
 
 #[no_mangle]
-pub extern "system" fn Java_com_example_siena_SienaNative_init(env: JNIEnv, _c: JClass, rom: jbyteArray, ipl: jbyteArray) -> jboolean {
-    android_logger::init_once(android_logger::Config::default().with_min_level(log::Level::Info));
+pub extern "system" fn Java_com_example_siena_SienaNative_init(env: JNIEnv, _c: JClass, rom: JByteArray, ipl: JByteArray) -> jboolean {
+    android_logger::init_once(android_logger::Config::default().with_max_level(log::Level::Info));
     
-    let r_vec = match env.convert_byte_array(rom) { Ok(v) => v, Err(_) => return 0 };
-    let i_vec = match env.convert_byte_array(ipl) { Ok(v) => v, Err(_) => return 0 };
+    let r_vec = match env.convert_byte_array(&rom) { Ok(v) => v, Err(_) => return 0 };
+    let i_vec = match env.convert_byte_array(&ipl) { Ok(v) => v, Err(_) => return 0 };
     
     if r_vec.is_empty() || i_vec.len() != 64 { return 0; }
 
@@ -43,7 +43,6 @@ pub extern "system" fn Java_com_example_siena_SienaNative_init(env: JNIEnv, _c: 
 pub extern "system" fn Java_com_example_siena_SienaNative_tickFrame(_e: JNIEnv, _c: JClass) {
     unsafe { if let Some(emu) = &mut EMULATOR {
         let mut ticks = 0;
-        // Roda ~1 frame (350k ticks master)
         while ticks < 350_000 { 
             match emu.tick() { Ok(_) => ticks += 80, Err(_) => break, } 
         }
@@ -55,7 +54,7 @@ pub extern "system" fn Java_com_example_siena_SienaNative_getPixels(env: JNIEnv,
     unsafe { if let Some(emu) = &mut EMULATOR {
         if let Some(rend) = &emu.cpu.bus.ppu.renderer {
             let p = rend.get_pixels();
-            let _ = env.set_int_array_region(buf, 0, p.iter().map(|&x| x as i32).collect::<Vec<i32>>().as_slice());
+            let _ = env.set_int_array_region(&buf, 0, p.iter().map(|&x| x as i32).collect::<Vec<i32>>().as_slice());
         }
     }}
 }

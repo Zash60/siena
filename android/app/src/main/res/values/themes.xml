@@ -1,7 +1,1 @@
-<resources>
-    <style name="Theme.Siena" parent="Theme.AppCompat.NoActionBar">
-        <item name="colorPrimary">#6200EE</item>
-        <item name="colorPrimaryDark">#3700B3</item>
-        <item name="colorAccent">#03DAC5</item>
-    </style>
-</resources>
+<resources><style name="Theme.Siena" parent="Theme.AppCompat.NoActionBar"><item name="colorPrimary">#6200EE</item><item name="colorPrimaryDark">#3700B3</item><item name="colorAccent">#03DAC5</item></style></resources>

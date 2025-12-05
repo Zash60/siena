@@ -1,83 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:background="#222222">
-
-    <!-- Tela do Emulador -->
-    <com.example.siena.EmulatorView
-        android:id="@+id/emulatorView"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:visibility="gone"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintBottom_toTopOf="@+id/layoutControls"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
-
-    <!-- Área de Loaders -->
-    <LinearLayout
-        android:id="@+id/layoutLoaders"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent">
-        
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="SIENA SNES - Android 14"
-            android:textColor="#FFFFFF"
-            android:textSize="24sp"
-            android:layout_marginBottom="20dp"
-            android:gravity="center"/>
-
-        <Button
-            android:id="@+id/btnLoadBios"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="1. Load BIOS (spc700.rom)" />
-
-        <Button
-            android:id="@+id/btnLoadRom"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="2. Load Game (.sfc)" />
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#222222">
+    <com.example.siena.EmulatorView android:id="@+id/emulatorView" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone" app:layout_constraintTop_toTopOf="parent" app:layout_constraintBottom_toTopOf="@+id/layoutControls" app:layout_constraintStart_toStartOf="parent" app:layout_constraintEnd_toEndOf="parent" />
+    <LinearLayout android:id="@+id/layoutLoaders" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="vertical" app:layout_constraintTop_toTopOf="parent" app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintEnd_toEndOf="parent">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SIENA SNES" android:textColor="#FFFFFF" android:textSize="24sp" android:layout_marginBottom="20dp" android:gravity="center"/>
+        <Button android:id="@+id/btnLoadBios" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="1. Load BIOS (spc700.rom)" />
+        <Button android:id="@+id/btnLoadRom" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="2. Load Game (.sfc)" />
     </LinearLayout>
-
-    <!-- Controles -->
-    <RelativeLayout
-        android:id="@+id/layoutControls"
-        android:layout_width="match_parent"
-        android:layout_height="200dp"
-        android:visibility="gone"
-        android:background="#33000000"
-        app:layout_constraintBottom_toBottomOf="parent">
-
+    <RelativeLayout android:id="@+id/layoutControls" android:layout_width="match_parent" android:layout_height="200dp" android:visibility="gone" android:background="#33000000" app:layout_constraintBottom_toBottomOf="parent">
         <Button android:id="@+id/btnUp" android:text="^" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnDown" android:layout_alignStart="@+id/btnDown"/>
         <Button android:id="@+id/btnDown" android:text="v" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentBottom="true" android:layout_marginStart="80dp" android:layout_marginBottom="20dp"/>
         <Button android:id="@+id/btnLeft" android:text="<" android:layout_width="60dp" android:layout_height="60dp" android:layout_toStartOf="@+id/btnDown" android:layout_alignTop="@+id/btnDown"/>
         <Button android:id="@+id/btnRight" android:text=">" android:layout_width="60dp" android:layout_height="60dp" android:layout_toEndOf="@+id/btnDown" android:layout_alignTop="@+id/btnDown"/>
-
         <Button android:id="@+id/btnA" android:text="A" android:layout_width="60dp" android:layout_height="60dp" android:layout_alignParentEnd="true" android:layout_marginEnd="20dp" android:layout_alignTop="@+id/btnDown"/>
         <Button android:id="@+id/btnB" android:text="B" android:layout_width="60dp" android:layout_height="60dp" android:layout_toStartOf="@+id/btnA" android:layout_alignTop="@+id/btnDown" android:layout_marginEnd="10dp"/>
         <Button android:id="@+id/btnX" android:text="X" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnA" android:layout_alignStart="@+id/btnA"/>
         <Button android:id="@+id/btnY" android:text="Y" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnB" android:layout_alignStart="@+id/btnB"/>
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_centerHorizontal="true"
-            android:layout_alignParentBottom="true"
-            android:layout_marginBottom="20dp">
+        <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_centerHorizontal="true" android:layout_alignParentBottom="true" android:layout_marginBottom="20dp">
             <Button android:id="@+id/btnSelect" android:text="Sel" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
             <Button android:id="@+id/btnStart" android:text="Start" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
         </LinearLayout>
-
         <Button android:id="@+id/btnL" android:text="L" android:layout_width="80dp" android:layout_height="50dp" android:layout_alignParentTop="true" android:layout_alignParentStart="true"/>
         <Button android:id="@+id/btnR" android:text="R" android:layout_width="80dp" android:layout_height="50dp" android:layout_alignParentTop="true" android:layout_alignParentEnd="true"/>
     </RelativeLayout>
