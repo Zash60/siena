@@ -43,7 +43,8 @@ pub extern "system" fn Java_com_example_siena_SienaNative_init(env: JNIEnv, _c: 
 pub extern "system" fn Java_com_example_siena_SienaNative_tickFrame(_e: JNIEnv, _c: JClass) {
     unsafe { if let Some(emu) = &mut EMULATOR {
         let mut ticks = 0;
-        while ticks < 300_000 { 
+        // Roda ~1 frame (350k ticks master)
+        while ticks < 350_000 { 
             match emu.tick() { Ok(_) => ticks += 80, Err(_) => break, } 
         }
     }}

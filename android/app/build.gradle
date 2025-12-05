@@ -1,7 +1,6 @@
 plugins {
     id 'com.android.application'
     id 'kotlin-android'
-    id 'org.mozilla.rust-android-gradle.rust-android'
 }
 
 android {
@@ -14,6 +13,8 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+        
+        // Indica ao Gradle que usaremos bibliotecas nativas pré-compiladas
         ndk {
             abiFilters "arm64-v8a", "x86_64"
         }
@@ -35,21 +36,19 @@ android {
     buildFeatures {
         viewBinding true
     }
-}
-
-cargo {
-    // FIX: Usar 'delegate.module' para evitar conflito com DependencyHandler.module()
-    delegate.module = "../../"
-    libname = "siena"
-    targets = ["arm64", "x86_64"]
-    profile = "release"
-    pythonCommand = "python3"
+    
+    // Define onde o Gradle vai encontrar as .so compiladas pelo cargo-ndk
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/jniLibs']
+        }
+    }
 }
 
 dependencies {
-    implementation 'androidx.core:core-ktx:1.9.0'
+    implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.9.0'
+    implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    implementation 'androidx.activity:activity-ktx:1.7.2'
+    implementation 'androidx.activity:activity-ktx:1.8.0'
 }
