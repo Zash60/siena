@@ -25,6 +25,7 @@ jobs:
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
 
         echo "🔧 Modificando visibilidade das Structs Rust..."
+        # || true garante que não falhe se já tiver sido modificado
         sed -i 's/cpu: Cpu65816/pub cpu: Cpu65816/' src/snes/emulator.rs || true
         sed -i 's/joypad_senders: Option/pub joypad_senders: Option/' src/snes/emulator.rs || true
         sed -i 's/ppu: PPU/pub ppu: PPU/' src/snes/bus/mainbus.rs || true
@@ -178,7 +179,7 @@ jobs:
         mkdir -p android/app/src/main/res/layout
         mkdir -p android/app/src/main/res/values
 
-        # Gradle Root - CORRIGIDO SINTAXE DEPRECATED
+        # Gradle Root
         cat <<EOF > android/build.gradle.kts
         buildscript {
             repositories {
@@ -203,11 +204,13 @@ jobs:
         }
         EOF
         
+        # Settings Gradle
         cat <<EOF > android/settings.gradle.kts
         rootProject.name = "Siena"
         include(":app")
         EOF
         
+        # App Gradle - AQUI ESTAVA O ERRO, CORRIGIDO COM 'this.module'
         cat <<EOF > android/app/build.gradle.kts
         plugins {
             id("com.android.application")
@@ -218,6 +221,7 @@ jobs:
         android {
             namespace = "com.example.siena"
             compileSdk = 34
+            ndkVersion = "25.2.9519653"
 
             defaultConfig {
                 applicationId = "com.example.siena"
@@ -250,7 +254,8 @@ jobs:
         }
 
         cargo {
-            module = "../../"
+            // FIX: Use 'this.module' para evitar conflito com a função module() do Gradle
+            this.module = "../../"
             libname = "siena"
             targets = listOf("arm64", "x86_64")
             profile = "release"
@@ -311,7 +316,7 @@ jobs:
         }
         EOF
 
-        # Kotlin: MainActivity.kt (SAF Storage)
+        # Kotlin: MainActivity.kt
         cat <<EOF > android/app/src/main/java/com/example/siena/MainActivity.kt
         package com.example.siena
         import android.net.Uri; import android.os.Bundle; import android.view.MotionEvent; import android.view.View; import android.widget.Button; import android.widget.Toast
