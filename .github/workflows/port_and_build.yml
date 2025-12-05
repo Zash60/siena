@@ -178,13 +178,13 @@ jobs:
         mkdir -p android/app/src/main/res/layout
         mkdir -p android/app/src/main/res/values
 
-        # Gradle Files CORRIGIDOS COM SINTAXE LIMPA
-        
+        # Gradle Root - CORRIGIDO: Adicionado gradlePluginPortal()
         cat <<EOF > android/build.gradle.kts
         buildscript {
             repositories {
                 google()
                 mavenCentral()
+                gradlePluginPortal()
             }
             dependencies {
                 classpath("com.android.tools.build:gradle:8.1.0")
