@@ -29,7 +29,6 @@ impl Renderer for AndroidRenderer {
         let mut pixels = self.pixel_data.lock().unwrap();
         for (i, chunk) in self.display_buffer.chunks_exact(4).enumerate() {
             if i < pixels.len() {
-                // Siena usa AtomicU8 RGB, Android usa ARGB Int
                 let r = chunk[0].load(Ordering::Relaxed) as u32;
                 let g = chunk[1].load(Ordering::Relaxed) as u32;
                 let b = chunk[2].load(Ordering::Relaxed) as u32;

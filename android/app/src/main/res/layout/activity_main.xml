@@ -4,7 +4,7 @@
     <LinearLayout android:id="@+id/layoutLoaders" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="vertical" app:layout_constraintTop_toTopOf="parent" app:layout_constraintBottom_toBottomOf="parent" app:layout_constraintStart_toStartOf="parent" app:layout_constraintEnd_toEndOf="parent">
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SIENA SNES" android:textColor="#FFFFFF" android:textSize="24sp" android:layout_marginBottom="20dp"/>
         <Button android:id="@+id/btnLoadBios" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="1. Load BIOS (spc700.rom)" />
-        <Button android:id="@+id/btnLoadRom" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="2. Load Game" />
+        <Button android:id="@+id/btnLoadRom" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="2. Load Game (.sfc)" />
     </LinearLayout>
     <RelativeLayout android:id="@+id/layoutControls" android:layout_width="match_parent" android:layout_height="200dp" android:visibility="gone" android:background="#33000000" app:layout_constraintBottom_toBottomOf="parent">
         <Button android:id="@+id/btnUp" android:text="^" android:layout_width="60dp" android:layout_height="60dp" android:layout_above="@+id/btnDown" android:layout_alignStart="@+id/btnDown"/>

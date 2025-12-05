@@ -8,7 +8,6 @@ use crate::frontend::android::AndroidRenderer;
 use crate::snes::ppu::ppu::{SCREEN_WIDTH, SCREEN_HEIGHT};
 use std::sync::{Arc, Mutex};
 
-// Singleton Unsafe (Padrão para emuladores simples em JNI)
 static mut EMULATOR: Option<Emulator<AndroidRenderer>> = None;
 static mut JOYPAD_SENDERS: Option<[crossbeam_channel::Sender<JoypadEvent>; JOYPAD_COUNT]> = None;
 
@@ -32,7 +31,6 @@ pub extern "system" fn Java_com_example_siena_SienaNative_init(env: JNIEnv, _c: 
 
     match emu_res {
         Ok(mut emu) => {
-            // Recaptura os senders internos se o emulador os recriou
             if let Ok(s) = emu.get_joypad_senders() { unsafe { JOYPAD_SENDERS = Some(s); } }
             unsafe { EMULATOR = Some(emu); }
             1
@@ -44,7 +42,6 @@ pub extern "system" fn Java_com_example_siena_SienaNative_init(env: JNIEnv, _c: 
 #[no_mangle]
 pub extern "system" fn Java_com_example_siena_SienaNative_tickFrame(_e: JNIEnv, _c: JClass) {
     unsafe { if let Some(emu) = &mut EMULATOR {
-        // Roda ciclos suficientes para um frame (~60fps)
         let mut ticks = 0;
         while ticks < 300_000 { 
             match emu.tick() { Ok(_) => ticks += 80, Err(_) => break, } 
