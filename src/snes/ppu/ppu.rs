@@ -50,7 +50,7 @@ pub struct PPU<TRenderer: Renderer> {
     pub(super) vram: InnerVram,
 
     #[serde(skip, default = "_default_none")]
-    pub pub pub pub pub pub pub pub pub renderer: Option<TRenderer>,
+    pub pub pub pub pub pub pub pub pub pub renderer: Option<TRenderer>,
 
     videoformat: VideoFormat,
 

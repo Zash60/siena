@@ -38,7 +38,8 @@ android {
 }
 
 cargo {
-    module = "../../"
+    // FIX: Usar 'delegate.module' para evitar conflito com DependencyHandler.module()
+    delegate.module = "../../"
     libname = "siena"
     targets = ["arm64", "x86_64"]
     profile = "release"
