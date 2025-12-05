@@ -178,7 +178,7 @@ jobs:
         mkdir -p android/app/src/main/res/layout
         mkdir -p android/app/src/main/res/values
 
-        # Gradle Root - CORRIGIDO: Adicionado gradlePluginPortal()
+        # Gradle Root - CORRIGIDO SINTAXE DEPRECATED
         cat <<EOF > android/build.gradle.kts
         buildscript {
             repositories {
@@ -198,8 +198,8 @@ jobs:
                 mavenCentral()
             }
         }
-        task("clean") {
-            delete(rootProject.buildDir)
+        tasks.register<Delete>("clean") {
+            delete(rootProject.layout.buildDirectory)
         }
         EOF
         
